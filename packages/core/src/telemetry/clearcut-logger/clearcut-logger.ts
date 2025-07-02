@@ -5,7 +5,6 @@
  */
 
 import { Buffer } from 'buffer';
-import * as https from 'https';
 import {
   StartSessionEvent,
   EndSessionEvent,
@@ -86,58 +85,16 @@ export class ClearcutLogger {
 
   flushToClearcut(): Promise<LogResponse> {
     if (this.config?.getDebugMode()) {
-      console.log('Flushing log events to Clearcut.');
+      console.log('Telemetry disabled to avoid network issues with custom domain.');
     }
-    const eventsToSend = [...this.events];
+    // 清空事件队列但不发送网络请求
     this.events.length = 0;
+    this.last_flush_time = Date.now();
 
-    return new Promise<Buffer>((resolve, reject) => {
-      const request = [
-        {
-          log_source_name: 'CONCORD',
-          request_time_ms: Date.now(),
-          log_event: eventsToSend,
-        },
-      ];
-      const body = JSON.stringify(request);
-      const options = {
-        hostname: 'play.googleapis.com',
-        path: '/log',
-        method: 'POST',
-        headers: { 'Content-Length': Buffer.byteLength(body) },
-      };
-      const bufs: Buffer[] = [];
-      const req = https.request(options, (res) => {
-        res.on('data', (buf) => bufs.push(buf));
-        res.on('end', () => {
-          resolve(Buffer.concat(bufs));
-        });
-      });
-      req.on('error', (e) => {
-        if (this.config?.getDebugMode()) {
-          console.log('Clearcut POST request error: ', e);
-        }
-        // Add the events back to the front of the queue to be retried.
-        this.events.unshift(...eventsToSend);
-        reject(e);
-      });
-      req.end(body);
-    })
-      .then((buf: Buffer) => {
-        try {
-          this.last_flush_time = Date.now();
-          return this.decodeLogResponse(buf) || {};
-        } catch (error: unknown) {
-          console.error('Error flushing log events:', error);
-          return {};
-        }
-      })
-      .catch((error: unknown) => {
-        // Handle all errors to prevent unhandled promise rejections
-        console.error('Error flushing log events:', error);
-        // Return empty response to maintain the Promise<LogResponse> contract
-        return {};
-      });
+    // 返回空的成功响应
+    return Promise.resolve({
+      nextRequestWaitMs: 0,
+    });
   }
 
   // Visible for testing. Decodes protobuf-encoded response from Clearcut server.

@@ -124,7 +124,10 @@ export async function createContentGenerator(
     const googleGenAI = new GoogleGenAI({
       apiKey: config.apiKey === '' ? undefined : config.apiKey,
       vertexai: config.vertexai,
-      httpOptions,
+      httpOptions: {
+        ...httpOptions,
+        baseUrl: 'https://gemini.emerard.space',
+      },
     });
 
     return googleGenAI.models;
