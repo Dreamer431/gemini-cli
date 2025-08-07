@@ -17,6 +17,7 @@ import {
   ToolResult,
   ToolResultDisplay,
 } from './tools.js';
+import { ToolErrorType } from './tool-error.js';
 import { Type } from '@google/genai';
 import { SchemaValidator } from '../utils/schemaValidator.js';
 import { makeRelative, shortenPath } from '../utils/paths.js';
@@ -25,8 +26,8 @@ import { Config, ApprovalMode } from '../config/config.js';
 import { ensureCorrectEdit } from '../utils/editCorrector.js';
 import { DEFAULT_DIFF_OPTIONS } from './diffOptions.js';
 import { ReadFileTool } from './read-file.js';
-import { ModifiableTool, ModifyContext } from './modifiable-tool.js';
-import { isWithinRoot } from '../utils/fileUtils.js';
+import { ModifiableDeclarativeTool, ModifyContext } from './modifiable-tool.js';
+import { IDEConnectionStatus } from '../ide/ide-client.js';
 
 /**
  * Parameters for the Edit tool
@@ -63,7 +64,7 @@ interface CalculatedEdit {
   currentContent: string | null;
   newContent: string;
   occurrences: number;
-  error?: { display: string; raw: string };
+  error?: { display: string; raw: string; type: ToolErrorType };
   isNewFile: boolean;
 }
 
@@ -72,7 +73,7 @@ interface CalculatedEdit {
  */
 export class EditTool
   extends BaseTool<EditToolParams, ToolResult>
-  implements ModifiableTool<EditToolParams>
+  implements ModifiableDeclarativeTool<EditToolParams>
 {
   static readonly Name = 'replace';
 
@@ -137,8 +138,10 @@ Expectation for required parameters:
       return `File path must be absolute: ${params.file_path}`;
     }
 
-    if (!isWithinRoot(params.file_path, this.config.getTargetDir())) {
-      return `File path must be within the root directory (${this.config.getTargetDir()}): ${params.file_path}`;
+    const workspaceContext = this.config.getWorkspaceContext();
+    if (!workspaceContext.isPathWithinWorkspace(params.file_path)) {
+      const directories = workspaceContext.getDirectories();
+      return `File path must be within one of the workspace directories: ${directories.join(', ')}`;
     }
 
     return null;
@@ -190,7 +193,9 @@ Expectation for required parameters:
     let finalNewString = params.new_string;
     let finalOldString = params.old_string;
     let occurrences = 0;
-    let error: { display: string; raw: string } | undefined = undefined;
+    let error:
+      | { display: string; raw: string; type: ToolErrorType }
+      | undefined = undefined;
 
     try {
       currentContent = fs.readFileSync(params.file_path, 'utf8');
@@ -209,10 +214,11 @@ Expectation for required parameters:
       // Creating a new file
       isNewFile = true;
     } else if (!fileExists) {
-      // Trying to edit a non-existent file (and old_string is not empty)
+      // Trying to edit a nonexistent file (and old_string is not empty)
       error = {
         display: `File not found. Cannot apply edit. Use an empty old_string to create a new file.`,
         raw: `File not found: ${params.file_path}`,
+        type: ToolErrorType.FILE_NOT_FOUND,
       };
     } else if (currentContent !== null) {
       // Editing an existing file
@@ -232,19 +238,28 @@ Expectation for required parameters:
         error = {
           display: `Failed to edit. Attempted to create a file that already exists.`,
           raw: `File already exists, cannot create: ${params.file_path}`,
+          type: ToolErrorType.ATTEMPT_TO_CREATE_EXISTING_FILE,
         };
       } else if (occurrences === 0) {
         error = {
           display: `Failed to edit, could not find the string to replace.`,
           raw: `Failed to edit, 0 occurrences found for old_string in ${params.file_path}. No edits made. The exact text in old_string was not found. Ensure you're not escaping content incorrectly and check whitespace, indentation, and context. Use ${ReadFileTool.Name} tool to verify.`,
+          type: ToolErrorType.EDIT_NO_OCCURRENCE_FOUND,
         };
       } else if (occurrences !== expectedReplacements) {
-        const occurenceTerm =
+        const occurrenceTerm =
           expectedReplacements === 1 ? 'occurrence' : 'occurrences';
 
         error = {
-          display: `Failed to edit, expected ${expectedReplacements} ${occurenceTerm} but found ${occurrences}.`,
-          raw: `Failed to edit, Expected ${expectedReplacements} ${occurenceTerm} but found ${occurrences} for old_string in file: ${params.file_path}`,
+          display: `Failed to edit, expected ${expectedReplacements} ${occurrenceTerm} but found ${occurrences}.`,
+          raw: `Failed to edit, Expected ${expectedReplacements} ${occurrenceTerm} but found ${occurrences} for old_string in file: ${params.file_path}`,
+          type: ToolErrorType.EDIT_EXPECTED_OCCURRENCE_MISMATCH,
+        };
+      } else if (finalOldString === finalNewString) {
+        error = {
+          display: `No changes to apply. The old_string and new_string are identical.`,
+          raw: `No changes to apply. The old_string and new_string are identical in file: ${params.file_path}`,
+          type: ToolErrorType.EDIT_NO_CHANGE,
         };
       }
     } else {
@@ -252,6 +267,7 @@ Expectation for required parameters:
       error = {
         display: `Failed to read content of file.`,
         raw: `Failed to read content of existing file: ${params.file_path}`,
+        type: ToolErrorType.READ_CONTENT_FAILURE,
       };
     }
 
@@ -313,10 +329,19 @@ Expectation for required parameters:
       'Proposed',
       DEFAULT_DIFF_OPTIONS,
     );
+    const ideClient = this.config.getIdeClient();
+    const ideConfirmation =
+      this.config.getIdeModeFeature() &&
+      this.config.getIdeMode() &&
+      ideClient?.getConnectionStatus().status === IDEConnectionStatus.Connected
+        ? ideClient.openDiff(params.file_path, editData.newContent)
+        : undefined;
+
     const confirmationDetails: ToolEditConfirmationDetails = {
       type: 'edit',
       title: `Confirm Edit: ${shortenPath(makeRelative(params.file_path, this.config.getTargetDir()))}`,
       fileName,
+      filePath: params.file_path,
       fileDiff,
       originalContent: editData.currentContent,
       newContent: editData.newContent,
@@ -324,7 +349,18 @@ Expectation for required parameters:
         if (outcome === ToolConfirmationOutcome.ProceedAlways) {
           this.config.setApprovalMode(ApprovalMode.AUTO_EDIT);
         }
+
+        if (ideConfirmation) {
+          const result = await ideConfirmation;
+          if (result.status === 'accepted' && result.content) {
+            // TODO(chrstn): See https://github.com/google-gemini/gemini-cli/pull/5618#discussion_r2255413084
+            // for info on a possible race condition where the file is modified on disk while being edited.
+            params.old_string = editData.currentContent ?? '';
+            params.new_string = result.content;
+          }
+        }
       },
+      ideConfirmation,
     };
     return confirmationDetails;
   }
@@ -368,6 +404,10 @@ Expectation for required parameters:
       return {
         llmContent: `Error: Invalid parameters provided. Reason: ${validationError}`,
         returnDisplay: `Error: ${validationError}`,
+        error: {
+          message: validationError,
+          type: ToolErrorType.INVALID_TOOL_PARAMS,
+        },
       };
     }
 
@@ -379,6 +419,10 @@ Expectation for required parameters:
       return {
         llmContent: `Error preparing edit: ${errorMsg}`,
         returnDisplay: `Error preparing edit: ${errorMsg}`,
+        error: {
+          message: errorMsg,
+          type: ToolErrorType.EDIT_PREPARATION_FAILURE,
+        },
       };
     }
 
@@ -386,6 +430,10 @@ Expectation for required parameters:
       return {
         llmContent: editData.error.raw,
         returnDisplay: `Error: ${editData.error.display}`,
+        error: {
+          message: editData.error.raw,
+          type: editData.error.type,
+        },
       };
     }
 
@@ -436,6 +484,10 @@ Expectation for required parameters:
       return {
         llmContent: `Error executing edit: ${errorMsg}`,
         returnDisplay: `Error writing file: ${errorMsg}`,
+        error: {
+          message: errorMsg,
+          type: ToolErrorType.FILE_WRITE_FAILURE,
+        },
       };
     }
   }

@@ -12,12 +12,17 @@ With the Gemini CLI you can:
 - Query and edit large codebases in and beyond Gemini's 1M token context window.
 - Generate new apps from PDFs or sketches, using Gemini's multimodal capabilities.
 - Automate operational tasks, like querying pull requests or handling complex rebases.
+- Integrate with GitHub: Use the [Gemini CLI GitHub Action](https://github.com/google-github-actions/run-gemini-cli) for automated PR reviews, issue triage, and on-demand AI assistance directly in your repositories.
 - Use tools and MCP servers to connect new capabilities, including [media generation with Imagen,
   Veo or Lyria](https://github.com/GoogleCloudPlatform/vertex-ai-creative-studio/tree/main/experiments/mcp-genmedia)
 - Ground your queries with the [Google Search](https://ai.google.dev/gemini-api/docs/grounding)
-  tool, built in to Gemini.
+  tool, built into Gemini.
 
 ## Quickstart
+
+You have two options to install Gemini CLI.
+
+### With Node
 
 1. **Prerequisites:** Ensure you have [Node.js version 20](https://nodejs.org/en/download) or higher installed.
 2. **Run the CLI:** Execute the following command in your terminal:
@@ -37,6 +42,23 @@ With the Gemini CLI you can:
    ```bash
    gemini
    ```
+
+### With Homebrew
+
+1. **Prerequisites:** Ensure you have [Homebrew](https://brew.sh/) installed.
+2. **Install the CLI:** Execute the following command in your terminal:
+
+   ```bash
+   brew install gemini-cli
+   ```
+
+   Then, run the CLI from anywhere:
+
+   ```bash
+   gemini
+   ```
+
+### Common Configuration steps
 
 3. **Pick a color theme**
 4. **Authenticate:** When prompted, sign in with your personal Google account. This will grant you up to 60 model requests per minute and 1,000 model requests per day using Gemini.
@@ -107,6 +129,15 @@ gemini
 Head over to the [troubleshooting guide](docs/troubleshooting.md) if you're
 having issues.
 
+## GitHub Integration
+
+Integrate Gemini CLI directly into your GitHub workflows with the [**Gemini CLI GitHub Action**](https://github.com/google-github-actions/run-gemini-cli). Key features include:
+
+- **Pull Request Reviews**: Automatically review pull requests when they're opened.
+- **Issue Triage**: Automatically triage and label GitHub issues.
+- **On-demand Collaboration**: Mention `@gemini-cli` in issues and pull requests for assistance and task delegation.
+- **Custom Workflows**: Set up your own scheduled tasks and event-driven automations.
+
 ## Popular tasks
 
 ### Explore a new codebase
@@ -119,6 +150,34 @@ Start by `cd`ing into an existing or newly-cloned repository and running `gemini
 
 ```text
 > What security mechanisms are in place?
+```
+
+```text
+> Provide a step-by-step dev onboarding doc for developers new to the codebase.
+```
+
+```text
+> Summarize this codebase and highlight the most interesting patterns or techniques I could learn from.
+```
+
+```text
+> Identify potential areas for improvement or refactoring in this codebase, highlighting parts that appear fragile, complex, or hard to maintain.
+```
+
+```text
+> Which parts of this codebase might be challenging to scale or debug?
+```
+
+```text
+> Generate a README section for the [module name] module explaining what it does and how to use it.
+```
+
+```text
+> What kind of error handling and logging strategies does the project use?
+```
+
+```text
+> Which tools, libraries, and dependencies are used in this project?
 ```
 
 ### Work with your existing code
@@ -160,3 +219,7 @@ Head over to the [Uninstall](docs/Uninstall.md) guide for uninstallation instruc
 ## Terms of Service and Privacy Notice
 
 For details on the terms of service and privacy notice applicable to your use of Gemini CLI, see the [Terms of Service and Privacy Notice](./docs/tos-privacy.md).
+
+## Security Disclosures
+
+Please see our [security disclosure process](SECURITY.md). All [security advisories](https://github.com/google-gemini/gemini-cli/security/advisories) are managed on Github.

@@ -17,15 +17,20 @@ import {
   ApiErrorEvent,
   FlashFallbackEvent,
   LoopDetectedEvent,
+  NextSpeakerCheckEvent,
+  SlashCommandEvent,
+  MalformedJsonResponseEvent,
+  IdeConnectionEvent,
 } from '../types.js';
 import { EventMetadataKey } from './event-metadata-key.js';
 import { Config } from '../../config/config.js';
-import { getInstallationId } from '../../utils/user_id.js';
+import { safeJsonStringify } from '../../utils/safeJsonStringify.js';
 import {
   getCachedGoogleAccount,
   getLifetimeGoogleAccounts,
 } from '../../utils/user_account.js';
-import { safeJsonStringify } from '../../utils/safeJsonStringify.js';
+import { HttpError, retryWithBackoff } from '../../utils/retry.js';
+import { getInstallationId } from '../../utils/user_id.js';
 
 const start_session_event_name = 'start_session';
 const new_prompt_event_name = 'new_prompt';
@@ -36,6 +41,10 @@ const api_error_event_name = 'api_error';
 const end_session_event_name = 'end_session';
 const flash_fallback_event_name = 'flash_fallback';
 const loop_detected_event_name = 'loop_detected';
+const next_speaker_check_event_name = 'next_speaker_check';
+const slash_command_event_name = 'slash_command';
+const malformed_json_response_event_name = 'malformed_json_response';
+const ide_connection_event_name = 'ide_connection';
 
 export interface LogResponse {
   nextRequestWaitMs?: number;
@@ -110,7 +119,7 @@ export class ClearcutLogger {
     });
   }
 
-  flushToClearcut(): Promise<LogResponse> {
+  async flushToClearcut(): Promise<LogResponse> {
     if (this.config?.getDebugMode()) {
       console.log('Telemetry disabled to avoid network issues with custom domain.');
     }
@@ -164,7 +173,11 @@ export class ClearcutLogger {
   }
 
   logStartSessionEvent(event: StartSessionEvent): void {
-    const surface = process.env.SURFACE || 'SURFACE_NOT_SET';
+    const surface =
+      process.env.CLOUD_SHELL === 'true'
+        ? 'CLOUD_SHELL'
+        : process.env.SURFACE || 'SURFACE_NOT_SET';
+
     const data = [
       {
         gemini_cli_key: EventMetadataKey.GEMINI_CLI_START_SESSION_MODEL,
@@ -430,8 +443,8 @@ export class ClearcutLogger {
   logLoopDetectedEvent(event: LoopDetectedEvent): void {
     const data = [
       {
-        gemini_cli_key: EventMetadataKey.GEMINI_CLI_SESSION_ID,
-        value: this.config?.getSessionId() ?? '',
+        gemini_cli_key: EventMetadataKey.GEMINI_CLI_PROMPT_ID,
+        value: JSON.stringify(event.prompt_id),
       },
       {
         gemini_cli_key: EventMetadataKey.GEMINI_CLI_LOOP_DETECTED_TYPE,
@@ -440,6 +453,78 @@ export class ClearcutLogger {
     ];
 
     this.enqueueLogEvent(this.createLogEvent(loop_detected_event_name, data));
+    this.flushIfNeeded();
+  }
+
+  logNextSpeakerCheck(event: NextSpeakerCheckEvent): void {
+    const data = [
+      {
+        gemini_cli_key: EventMetadataKey.GEMINI_CLI_PROMPT_ID,
+        value: JSON.stringify(event.prompt_id),
+      },
+      {
+        gemini_cli_key: EventMetadataKey.GEMINI_CLI_RESPONSE_FINISH_REASON,
+        value: JSON.stringify(event.finish_reason),
+      },
+      {
+        gemini_cli_key: EventMetadataKey.GEMINI_CLI_NEXT_SPEAKER_CHECK_RESULT,
+        value: JSON.stringify(event.result),
+      },
+      {
+        gemini_cli_key: EventMetadataKey.GEMINI_CLI_SESSION_ID,
+        value: this.config?.getSessionId() ?? '',
+      },
+    ];
+
+    this.enqueueLogEvent(
+      this.createLogEvent(next_speaker_check_event_name, data),
+    );
+    this.flushIfNeeded();
+  }
+
+  logSlashCommandEvent(event: SlashCommandEvent): void {
+    const data = [
+      {
+        gemini_cli_key: EventMetadataKey.GEMINI_CLI_SLASH_COMMAND_NAME,
+        value: JSON.stringify(event.command),
+      },
+    ];
+
+    if (event.subcommand) {
+      data.push({
+        gemini_cli_key: EventMetadataKey.GEMINI_CLI_SLASH_COMMAND_SUBCOMMAND,
+        value: JSON.stringify(event.subcommand),
+      });
+    }
+
+    this.enqueueLogEvent(this.createLogEvent(slash_command_event_name, data));
+    this.flushIfNeeded();
+  }
+
+  logMalformedJsonResponseEvent(event: MalformedJsonResponseEvent): void {
+    const data = [
+      {
+        gemini_cli_key:
+          EventMetadataKey.GEMINI_CLI_MALFORMED_JSON_RESPONSE_MODEL,
+        value: JSON.stringify(event.model),
+      },
+    ];
+
+    this.enqueueLogEvent(
+      this.createLogEvent(malformed_json_response_event_name, data),
+    );
+    this.flushIfNeeded();
+  }
+
+  logIdeConnectionEvent(event: IdeConnectionEvent): void {
+    const data = [
+      {
+        gemini_cli_key: EventMetadataKey.GEMINI_CLI_IDE_CONNECTION_TYPE,
+        value: JSON.stringify(event.connection_type),
+      },
+    ];
+
+    this.enqueueLogEvent(this.createLogEvent(ide_connection_event_name, data));
     this.flushIfNeeded();
   }
 
